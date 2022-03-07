@@ -1,0 +1,17 @@
+{
+    "theme": {
+    "barColor": "insert_color_here",
+    "backgroundColor": "black"
+    },
+    "settings": {
+        "midnightDarkMode": false,
+        "defaults": {
+            "immovable": true,
+            "collidable": false,
+            "alpha": 1,
+            "event": "none",
+            "params": []
+        }
+    }
+
+}
