@@ -2,5 +2,10 @@
     "tiles": [{
         "name": "solid_color",
         "path": "solid_color"
-    }]
+    },
+    {
+        "name": "sweetheart",
+        "path": "assets/images/tiles/basic/sweetheart.png"
+    }
+]
 }

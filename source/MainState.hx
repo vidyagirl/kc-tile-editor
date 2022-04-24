@@ -2,7 +2,9 @@ package;
 
 import Tile.EventDef;
 import Tile.TileDef;
+import Util.Program;
 import flixel.FlxG;
+import flixel.FlxObject;
 import flixel.FlxSprite;
 import flixel.FlxState;
 import flixel.addons.ui.FlxButtonPlus;
@@ -20,6 +22,7 @@ import flixel.input.FlxInput;
 import flixel.text.FlxText;
 import flixel.ui.FlxButton;
 import flixel.util.FlxColor;
+import flixel.util.FlxTimer;
 import haxe.Json;
 import haxe.ds.StringMap;
 import openfl.events.Event;
@@ -30,14 +33,12 @@ import sys.FileSystem;
 
 using StringTools;
 
-typedef TileStringDef =
-{
+typedef TileStringDef = {
 	var name:String;
 	var path:String;
 }
 
-class MainState extends FlxState
-{
+class MainState extends FlxState {
 	// * "make it work with haxeflixel"
 	// * -ninjamuffin99, 2022
 	public var background:FlxTypedGroup<Tile>;
@@ -67,8 +68,26 @@ class MainState extends FlxState
 	public var curGrp:String = '';
 	public var curSpriteMap:StringMap<Array<String>> = null;
 
-	override public function create()
-	{
+	public var focusedOnText(get, never):Bool;
+
+	public var allowTileOverlapping:Bool = false;
+
+	function get_focusedOnText() {
+		if (eventInputText != null && eventArgsInputText != null && colorInputText != null)
+			return eventInputText.hasFocus || eventArgsInputText.hasFocus || colorInputText.hasFocus;
+		return false;
+	}
+
+	public var camFollow:FlxObject;
+
+	public static var instance:MainState;
+
+	public function new() {
+		super();
+		instance = this;
+	}
+
+	override public function create() {
 		background = new FlxTypedGroup<Tile>();
 		midground = new FlxTypedGroup<Tile>();
 		foreground = new FlxTypedGroup<Tile>();
@@ -78,32 +97,31 @@ class MainState extends FlxState
 		add(midground);
 		add(foreground);
 		add(uiGroup);
-		uiGroup.memberAdded.add(function(spr:FlxSprite)
-		{
+
+		camFollow = new FlxObject(0, 0, 1, 1);
+		add(camFollow);
+
+		FlxG.camera.follow(camFollow, LOCKON, 1);
+
+		uiGroup.memberAdded.add(function(spr:FlxSprite) {
 			spr.scrollFactor.set();
 		});
 
-		setCallbacks(background, function(tile:Tile)
-		{
+		setCallbacks(background, function(tile:Tile) {
 			tilesArray.push(tile);
-		}, function(tile:Tile)
-		{
+		}, function(tile:Tile) {
 			tilesArray.remove(tile);
 		});
 
-		setCallbacks(midground, function(tile:Tile)
-		{
+		setCallbacks(midground, function(tile:Tile) {
 			tilesArray.push(tile);
-		}, function(tile:Tile)
-		{
+		}, function(tile:Tile) {
 			tilesArray.remove(tile);
 		});
 
-		setCallbacks(foreground, function(tile:Tile)
-		{
+		setCallbacks(foreground, function(tile:Tile) {
 			tilesArray.push(tile);
-		}, function(tile:Tile)
-		{
+		}, function(tile:Tile) {
 			tilesArray.remove(tile);
 		});
 
@@ -112,8 +130,7 @@ class MainState extends FlxState
 		super.create();
 	}
 
-	inline function setCallbacks(grp:FlxTypedGroup<Tile>, memberAdded:Tile->Void, memberRemoved:Tile->Void)
-	{
+	inline function setCallbacks(grp:FlxTypedGroup<Tile>, memberAdded:Tile->Void, memberRemoved:Tile->Void) {
 		grp.memberAdded.add(memberAdded);
 		grp.memberRemoved.add(memberRemoved);
 	}
@@ -121,40 +138,104 @@ class MainState extends FlxState
 	public var isOverlappingSmth:Bool = false;
 	public var overlappedTile:Tile;
 
-	override public function update(elapsed:Float)
-	{
+	// * unused function since addTile()'s tiledef comparing is broken for some reason
+	function mouseInput() {
+		if (FlxG.mouse.pressed && !FlxG.mouse.overlaps(uiGroup)) {
+			addTile();
+		}
+
+		if (FlxG.mouse.pressedRight && !FlxG.mouse.overlaps(uiGroup)) {
+			for (i in getLayerFromStr(curLayer).members) {
+				if (FlxG.mouse.overlaps(i))
+					removeTile(i);
+			}
+		}
+	}
+
+	override public function update(elapsed:Float) {
 		mouseX = FlxG.mouse.x;
 		mouseY = FlxG.mouse.y;
 
 		gridMouseX = Math.floor(mouseX / GRID_SIZE) * GRID_SIZE;
 		gridMouseY = Math.floor(mouseY / GRID_SIZE) * GRID_SIZE;
 
-		if (FlxG.mouse.justPressed && !FlxG.mouse.overlaps(uiGroup))
-		{
+		if (FlxG.mouse.justPressed && !FlxG.mouse.overlaps(uiGroup)) {
 			addTile();
 		}
-		if (FlxG.mouse.justPressedRight && !FlxG.mouse.overlaps(uiGroup))
-		{
-			for (i in getLayerFromStr(curLayer).members)
-			{
+		if (FlxG.mouse.justPressedRight && !FlxG.mouse.overlaps(uiGroup)) {
+			for (i in getLayerFromStr(curLayer).members) {
 				if (FlxG.mouse.overlaps(i))
 					removeTile(i);
 			}
 		}
+		// mouseInput();
 		updateUI();
+
+		camFollowMovement();
+
+		if (!focusedOnText && !isInDropdown) {
+			keybinds();
+		}
+
 		super.update(elapsed);
 	}
 
-	function getColor()
-	{
+	var resetTmr:FlxTimer;
+
+	function keybinds() {
+		var ctrl = FlxG.keys.pressed.CONTROL;
+		if (ctrl) {
+			if (FlxG.keys.justPressed.S) {
+				saveBtn.onClickCallback();
+			}
+			else if (FlxG.keys.justPressed.L) {
+				load();
+			}
+			else if (FlxG.keys.justPressed.R) {
+				// FlxG.resetState();
+				// loadTiles();
+			}
+		}
+	}
+
+	function camFollowMovement() {
+		if (!focusedOnText) {
+			if (FlxG.keys.anyPressed([UP, W])) {
+				camFollow.velocity.y = -200;
+			}
+			else if (FlxG.keys.anyPressed([DOWN, S])) {
+				camFollow.velocity.y = 200;
+			}
+			else if (FlxG.keys.anyPressed([UP, W]) && FlxG.keys.anyPressed([DOWN, S])) {
+				camFollow.velocity.y = 0;
+			}
+			else {
+				camFollow.velocity.y = 0;
+			}
+
+			if (FlxG.keys.anyPressed([LEFT, A])) {
+				camFollow.velocity.x = -200;
+			}
+			else if (FlxG.keys.anyPressed([RIGHT, D])) {
+				camFollow.velocity.x = 200;
+			}
+			else if (FlxG.keys.anyPressed([LEFT, A]) && FlxG.keys.anyPressed([RIGHT, D])) {
+				camFollow.velocity.x = 0;
+			}
+			else {
+				camFollow.velocity.x = 0;
+			}
+		}
+	}
+
+	function getColor() {
 		if (colorInputText.text.length > 0)
 			return curColor = Std.parseInt('0x' + colorInputText.text);
 		else
 			return curColor = FlxColor.WHITE;
 	}
 
-	function addTile()
-	{
+	function addTile() {
 		#if debug
 		trace('adding tile @ layer $curLayer');
 		#end
@@ -168,7 +249,8 @@ class MainState extends FlxState
 			collidable: isCollidable,
 			immovable: isImmovable,
 			layer: curLayer,
-			graphicPath: curGraphicPath
+			graphicPath: curGraphicPath,
+			event: getEventItems()
 		}
 
 		var tile = new Tile(tileDef);
@@ -182,32 +264,36 @@ class MainState extends FlxState
 		isOverlappingSmth = FlxG.mouse.overlaps(getLayerFromStr(curLayer));
 		overlappedTile = getOverlappedTile();
 
-		if (isOverlappingSmth && overlappedTile != null)
-		{
+		if (isOverlappingSmth && overlappedTile != null && !allowTileOverlapping) {
 			removeTile(overlappedTile);
 		}
 
-		switch (curLayer)
-		{
+		switch (curLayer) {
 			case 'background':
-				trace(1);
+				trace('added tile to background');
 				background.add(tile);
 			case 'midground':
-				trace(2);
+				trace('added tile to midground');
 				midground.add(tile);
 			case 'foreground':
-				trace(3);
+				trace('added tile to foreground');
 				foreground.add(tile);
 		}
 	}
 
-	function removeTile(tile:Tile)
-	{
+	function arrayFromDef(def:TileDef):Array<Dynamic> {
+		return [
+
+			def.x, def.y, def.alpha, def.angle, def.color, def.collidable, def.immovable, def.layer, def.graphicPath, def.event
+
+		];
+	}
+
+	function removeTile(tile:Tile) {
 		#if debug
 		trace('removin tile @ $curLayer');
 		#end
-		switch (curLayer)
-		{
+		switch (curLayer) {
 			case 'background':
 				if (tile.layer == 'background')
 					background.remove(tile, true);
@@ -222,33 +308,32 @@ class MainState extends FlxState
 		tilesArray.remove(tile);
 	}
 
-	inline function getOverlappedTile()
-	{
+	public inline function getEventItems():EventDef {
+		return {
+			name: eventInputText.text,
+			values: eventArgsInputText.text.replace(' ', '').split(',')
+		};
+	}
+
+	inline function getOverlappedTile() {
 		var _overlappedTile:Tile = null;
 
-		switch (curLayer)
-		{
+		switch (curLayer) {
 			case 'background':
-				for (i in background.members)
-				{
-					if (FlxG.mouse.overlaps(i))
-					{
+				for (i in background.members) {
+					if (FlxG.mouse.overlaps(i)) {
 						_overlappedTile = i;
 					}
 				}
 			case 'midground':
-				for (i in midground.members)
-				{
-					if (FlxG.mouse.overlaps(i))
-					{
+				for (i in midground.members) {
+					if (FlxG.mouse.overlaps(i)) {
 						_overlappedTile = i;
 					}
 				}
 			case 'foreground':
-				for (i in foreground.members)
-				{
-					if (FlxG.mouse.overlaps(i))
-					{
+				for (i in foreground.members) {
+					if (FlxG.mouse.overlaps(i)) {
 						_overlappedTile = i;
 					}
 				}
@@ -257,10 +342,8 @@ class MainState extends FlxState
 		return _overlappedTile;
 	}
 
-	function getLayerFromStr(str:String)
-	{
-		switch (str.toLowerCase())
-		{
+	function getLayerFromStr(str:String) {
+		switch (str.toLowerCase()) {
 			case 'background':
 				return background;
 			case 'midground':
@@ -272,11 +355,9 @@ class MainState extends FlxState
 		}
 	}
 
-	public function getData()
-	{
+	public function getData() {
 		var tGroups:Array<String> = [];
-		if (FileSystem.exists('assets/data/tiles/list.json'))
-		{
+		if (FileSystem.exists('assets/data/tiles/list.json')) {
 			var parse:Array<String> = Json.parse(Assets.getText('assets/data/tiles/list.json')).list;
 			trace(parse);
 			if (parse != null)
@@ -288,14 +369,14 @@ class MainState extends FlxState
 
 		trace(tGroups);
 
-		for (i in tGroups)
-		{
-			if (FileSystem.exists('assets/data/tiles/$i.json'))
-			{
+		for (i in tGroups) {
+			if (FileSystem.exists('assets/data/tiles/$i.json')) {
 				var jsonStuff:Array<TileStringDef> = Json.parse(Assets.getText('assets/data/tiles/$i.json')).tiles;
 				var theTiles:Array<TileStringDef> = [];
-				for (x in 0...jsonStuff.length)
+				for (x in 0...jsonStuff.length) {
+					trace('$i/' + jsonStuff[x].path);
 					theTiles.push({name: jsonStuff[x].name, path: jsonStuff[x].path});
+				}
 				sprMap.set(i, theTiles);
 			}
 		}
@@ -305,8 +386,7 @@ class MainState extends FlxState
 		return {t: tGroups, s: sprMap};
 	}
 
-	public inline function clearTiles()
-	{
+	public inline function clearTiles() {
 		background.clear();
 		midground.clear();
 		foreground.clear();
@@ -331,9 +411,9 @@ class MainState extends FlxState
 	public var alphaDisplayText:FlxText;
 	public var alphaSlider:FlxUISlider;
 	public var alphaInputText:FlxInputText;
+	public var allowTileOverlappingCheckbox:FlxUICheckBox;
 
-	public function generateUI()
-	{
+	public function generateUI() {
 		var coolData = getData();
 		var groupCool:Array<String> = coolData.t;
 		var sprMapCool:StringMap<Array<TileStringDef>> = coolData.s;
@@ -374,16 +454,12 @@ class MainState extends FlxState
 		volProofInputText(eventInputText);
 		volProofInputText(eventArgsInputText);
 
-		tileGroupSelect = new FlxUIDropDownMenu(10, 40, FlxUIDropDownMenu.makeStrIdLabelArray(groupCool, true), function(grp:String)
-		{
-			if (curGrp != groupCool[Std.parseInt(grp)])
-			{
+		tileGroupSelect = new FlxUIDropDownMenu(10, 40, FlxUIDropDownMenu.makeStrIdLabelArray(groupCool, true), function(grp:String) {
+			if (curGrp != groupCool[Std.parseInt(grp)]) {
 				curGrp = groupCool[Std.parseInt(grp)];
-				if (tileSpriteSelect != null)
-				{
+				if (tileSpriteSelect != null) {
 					var listThingy = [];
-					for (i in sprMapCool.get(curGrp))
-					{
+					for (i in sprMapCool.get(curGrp)) {
 						listThingy.push(i.name);
 					}
 					tileSpriteSelect.setData(FlxUIDropDownMenu.makeStrIdLabelArray(listThingy));
@@ -391,18 +467,12 @@ class MainState extends FlxState
 			}
 		});
 
-		var someList = [];
-
-		for (i in sprMapCool.get(curGrp))
-		{
-			someList.push(i.name);
-		}
+		var someList = [for (i in sprMapCool.get(curGrp)) i.name];
 
 		tileSpriteSelect = new FlxUIDropDownMenu(tileGroupSelect.x + tileGroupSelect.width + 10, tileGroupSelect.y,
-			FlxUIDropDownMenu.makeStrIdLabelArray(someList, true), function(spr:String)
-		{
-			curGraphicPath = sprMapCool.get(curGrp)[Std.parseInt(spr)].path;
-			trace(curGraphicPath);
+			FlxUIDropDownMenu.makeStrIdLabelArray(someList, true), function(spr:String) {
+				curGraphicPath = sprMapCool.get(curGrp)[Std.parseInt(spr)].path;
+				trace(curGraphicPath);
 		});
 
 		uiGroup.add(tileGroupSelect);
@@ -420,23 +490,20 @@ class MainState extends FlxState
 		eventArgsDisplayText.setPosition(10, eventInputText.y + 30);
 		eventArgsInputText.setPosition(10, eventArgsDisplayText.y + 20);
 
-		isImmovableCheckbox.callback = function()
-		{
+		isImmovableCheckbox.callback = function() {
 			isImmovable = !isImmovable;
 			isImmovableCheckbox.checked = isImmovable;
 		}
 
-		isCollidableCheckbox.callback = function()
-		{
+		isCollidableCheckbox.callback = function() {
 			isCollidable = !isCollidable;
 			isCollidableCheckbox.checked = isCollidable;
 		}
 
-		layerSelect = new FlxUIDropDownMenu(10, eventArgsInputText.y + 40, FlxUIDropDownMenu.makeStrIdLabelArray(['background', 'midground', 'foreground']),
-			function(str:String)
-			{
+		layerSelect = new FlxUIDropDownMenu(10, eventArgsInputText.y + 40,
+			FlxUIDropDownMenu.makeStrIdLabelArray(['background', 'midground', 'foreground', 'events']), function(str:String) {
 				curLayer = str;
-			});
+		});
 
 		alphaSlider = new FlxUISlider(this, "curAlpha", 10, layerSelect.y + 50, 0, 1, Std.int(verticalUIBar.width - 30), 15, 5, FlxColor.WHITE,
 			FlxColor.BLACK);
@@ -447,14 +514,22 @@ class MainState extends FlxState
 		uiGroup.add(layerSelect);
 		uiGroup.add(alphaSlider);
 
-		saveBtn = new FlxButtonPlus(alphaSlider.x, alphaSlider.y + 40, function()
-		{
+		allowTileOverlappingCheckbox = new FlxUICheckBox(10, alphaSlider.y + 65, null, null, "Allow Tile Overlapping");
+		allowTileOverlappingCheckbox.callback = function() {
+			allowTileOverlapping = !allowTileOverlapping;
+			allowTileOverlappingCheckbox.checked = allowTileOverlapping;
+		}
+
+		uiGroup.add(allowTileOverlappingCheckbox);
+
+		saveBtn = new FlxButtonPlus(alphaSlider.x, allowTileOverlappingCheckbox.y + 30, function() {
 			var fr:FileReference = new FileReference();
 			fr.save(Writer.writeTilesToJSON(tilesArray), "level.json");
+
+			Program.title = 'kc level editor - ' + fr.name;
 		}, "Save");
 
-		loadBtn = new FlxButtonPlus(saveBtn.x + saveBtn.width + 10, saveBtn.y, function()
-		{
+		loadBtn = new FlxButtonPlus(saveBtn.x + saveBtn.width + 10, saveBtn.y, function() {
 			load();
 		}, "Load");
 
@@ -462,10 +537,10 @@ class MainState extends FlxState
 		uiGroup.add(loadBtn);
 	}
 
-	public function updateUI()
-	{
-		if (tileSpriteSelect.list[0].visible)
-		{
+	var isInDropdown:Bool = false;
+
+	public function updateUI() {
+		if (tileSpriteSelect.list[0].visible) {
 			isImmovableCheckbox.active = false;
 			isCollidableCheckbox.active = false;
 			colorInputText.active = false;
@@ -473,9 +548,10 @@ class MainState extends FlxState
 			eventArgsInputText.active = false;
 			layerSelect.active = false;
 			alphaSlider.active = false;
+			allowTileOverlappingCheckbox.active = false;
+			isInDropdown = true;
 		}
-		else if (tileGroupSelect.list[0].visible)
-		{
+		else if (tileGroupSelect.list[0].visible) {
 			isImmovableCheckbox.active = true;
 			isCollidableCheckbox.active = false;
 			colorInputText.active = false;
@@ -483,9 +559,10 @@ class MainState extends FlxState
 			eventArgsInputText.active = false;
 			layerSelect.active = false;
 			alphaSlider.active = false;
+			allowTileOverlappingCheckbox.active = false;
+			isInDropdown = true;
 		}
-		else
-		{
+		else {
 			isImmovableCheckbox.active = true;
 			isCollidableCheckbox.active = true;
 			colorInputText.active = true;
@@ -493,20 +570,19 @@ class MainState extends FlxState
 			eventArgsInputText.active = true;
 			layerSelect.active = true;
 			alphaSlider.active = true;
+			allowTileOverlappingCheckbox.active = true;
+			isInDropdown = false;
 		}
 	}
 
-	inline function volProofInputText(inputText:FlxInputText)
-	{
-		inputText.focusGained = function()
-		{
+	inline function volProofInputText(inputText:FlxInputText) {
+		inputText.focusGained = function() {
 			FlxG.sound.volumeUpKeys = null;
 			FlxG.sound.volumeDownKeys = null;
 			FlxG.sound.muteKeys = null;
 		}
 
-		inputText.focusLost = function()
-		{
+		inputText.focusLost = function() {
 			FlxG.sound.volumeUpKeys = [PLUS, NUMPADPLUS];
 			FlxG.sound.volumeDownKeys = [MINUS, NUMPADMINUS];
 			FlxG.sound.muteKeys = [ZERO, NUMPADZERO];
@@ -519,22 +595,17 @@ class MainState extends FlxState
 	 * Demo I took the code from: https://haxeflixel.com/demos/FileBrowse/
 	 * Demo's github link: https://github.com/HaxeFlixel/flixel-demos/tree/dev/UserInterface/FileBrowse/source
 	 */
-	public function load()
-	{
+	public function load() {
+		clearTiles();
 		var fr:FileReference = new FileReference();
 		fr.addEventListener(Event.SELECT, onSelect);
 		fr.addEventListener(Event.CANCEL, onCancel);
-		var filters:Array<FileFilter> = new Array<FileFilter>();
-		filters.push(new FileFilter("JSON files", "*.json"));
-		fr.browse();
+		fr.browse([new FileFilter("JSON files", "*.json")]);
 	}
 
-	public function loadTiles(tileArray:Array<TileDef>)
-	{
-		for (i in tileArray)
-		{
-			switch (i.layer.toLowerCase())
-			{
+	public function loadTiles(tileArray:Array<TileDef>) {
+		for (i in tileArray) {
+			switch (i.layer.toLowerCase()) {
 				case 'background':
 					var tile = new Tile(i);
 					background.add(tile);
@@ -547,27 +618,33 @@ class MainState extends FlxState
 					var tile = new Tile(i);
 					foreground.add(tile);
 					tilesArray.push(tile);
+				// todo: load event tiles
+				default:
+					var tile = new Tile(i);
+					background.add(tile);
+					tilesArray.push(tile);
 			}
 		}
 	}
 
-	public function onSelect(e:Event)
-	{
+	public function onSelect(e:Event) {
 		trace('hi');
 		var fr:FileReference = cast(e.target, FileReference);
 		fr.addEventListener(Event.COMPLETE, onLoad, false, 0, true);
-		var dataStuff:{tiles:Array<TileDef>} = cast Json.parse(Assets.getText('assets/data/tilemaps/' + fr.name));
-		trace('assets/data/tilemaps/' + fr.name);
-		loadTiles(dataStuff.tiles);
+		fr.load();
 	}
 
-	public function onLoad(e:Event)
-	{
+	public function onLoad(e:Event) {
 		trace('bbbbbbbbbfds');
 		var fr:FileReference = cast(e.target, FileReference);
 		fr.removeEventListener(Event.COMPLETE, onLoad);
 		trace(fr.name);
-		trace(fr.data);
+		trace(fr.data.toString());
+		var theJson = Json.parse(fr.data.toString());
+		if (theJson.tiles != null) {
+			loadTiles(theJson.tiles);
+			Program.title = 'kc level editor - ' + fr.name;
+		}
 	}
 
 	public function onCancel(e:Event) {}
